@@ -11,26 +11,14 @@ import sys,time,datetime, math,re,operator
 from datetime import datetime
 
 '''
-Stripped bare essentials for calculating the stellar parameters based on what CXC thinks the ACIS calibration is. 
+CASE I: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
 
+Generally, we use specific energy bins to generate the effective area curve, the bins are: 
+e1 = 0.175 - 0.231 keV,  e2 = 0.231 - 0.258 keV,  e3 = 0.258 - 0.277 keV,  e4 = 0.277 - 0.3 keV
+this bins are set in the likelihood call because eventually they will be free parameters, but  
+in CASE I, they are set to the best guess from CXC Cycle 12. 
 
-Energy bins for ARF:
-e1 = 0.175 - 0.231 keV
-e2 = 0.231 - 0.258 keV
-e3 = 0.258 - 0.277 keV
-e4 = 0.277 - 0.3 keV
-
-Priors
-EAmax_1 = 75
-EAmax_2 = 160 
-EAmax_3 = 230
-EAmax_4 = 120
-
-Effective areas must be less than or equal too: 100, 170, 210, and 130 cm^2
-EA_e1 < EA_e2 < EA_e3
-EA_e4 < EA_e3
-where e1, e2, e3, e4, are those energy ranges
-EA is the effective area in those energy ranges
+For this case, we have some priors on the stellar parameters. 
 
 '''
 
@@ -65,23 +53,8 @@ class ACIS(object):
         self.eRad  = 0.004
         self.eDist = 28.0/1000.0
         self.eNH = 0.01
-
-        # build interpolatiors for ext.
-        # N_H_data = Table.read("N_H.fits",format='fits')
-        # N_H_str = N_H_data.keys()
-        # N_H_val = np.array([float(x) for x in N_H_str])
-        # self.channelID = np.arange(0,14,1)
-
-        # interpobj = {}
-        # for cID in self.channelID:
-        #     interpobj[cID] = interpolate.interp1d(
-        #         np.array(N_H_val),
-        #         np.array(list(N_H_data[cID].as_void())),
-        #         kind='linear')
-
-        # self.interpobj = interpobj
-
-        # functional form of W(N_H)
+        
+        # functional form of exinction curve, W(N_H), from source unknown
         c0 = [34.6,267.9,-476.1]
         c1 = [78.1, 18.8, 4.3]
         e0 = np.where((self.e>0.1)&(self.e<=0.284))
@@ -90,7 +63,7 @@ class ACIS(object):
         w[e0] = 1e-2*(c0[0]+c0[1]*self.e[e0]+c0[2]*self.e[e0]**2)/self.e[e0]**3
         w[e1] = 1e-2*(c1[0]+c1[1]*self.e[e1]+c1[2]*self.e[e1]**2)/self.e[e1]**3
         self.w = w
-
+        
         # original initial values for RMF
         self.initarr = ({
             'mu_m':74.3577,
@@ -118,11 +91,14 @@ class ACIS(object):
         self.arf4 = 5.0
 
     def wabs(self,nh): # c=[34.6,267.9,-476.1]):
+        ''' wabs function used to calculate extinction for a given nh and using the functional form stored in self.w '''
         return np.exp(-nh*self.w)
 
     def NormPDF(self,x,mu,sigma):
+        ''' NormPDF used in piprob function '''
         return (1/(sigma*np.sqrt(2.0*np.pi)))*np.exp(-((x-mu)/(np.sqrt(2.0)*sigma))**2.0)
     def NormCDF(self,x,mu,sigma,alpha):
+        ''' NormCDF used in piprob function '''
         return (0.5*(1.0+erf((alpha*((x-mu)/sigma))/np.sqrt(2.0))))
 
     def bb_free(self,Teff,Dist,Rad):
@@ -134,31 +110,7 @@ class ACIS(object):
         BBnorm = (Lstar/1.0e+39)*np.power(Dist/10.0,-2.0)
         kT = Teff/11604.5e+3 
         return BBnorm*8.0525*np.power(self.e,2.0)*np.power(kT,-4.0)/(np.exp(self.e/kT)-1.0)
-
-
-    def arf(self,p0): 
-        """
-        NOT USING THIS FUNCTION IN CODE I!!!!!!!!!!!!!!!!!!
-
-        arf is the effective area curve, this has units of cm^2 and details the sensitivity and 
-        transmission of the Chandra HRMA.  
-
-        The default p0, indicates the best fit of the ARF estimate used in PIMMS simulations. 
-        sigma,mu,alpha,a = p0, where:
-            sigma - the sigma of the skewed gaussian,
-            mu    - mean of the skewed gaussian, also the effective edge of the ARF (~0.29 keV),
-            alpha - skewness, very left-skewed, hence a high negative number (-17), 
-            a     - gaussian normalization, it isn't a direct conversion to the get the 
-                    maximum effective area, but there might be a relationship.  
         
-        I think, in the MCMC, we'll have to keep sigma, mu, and alpha constrained to near their 
-        default values, with the most freedom in a.
-        """
-        sigma,mu,alpha_arf,a = p0 
-        normpdf = self.NormPDF(self.e,mu,sigma)
-        normcdf = self.NormCDF(self.e,mu,sigma,alpha_arf)
-        return 2.0*a*normpdf*normcdf+1.0
-
     def piprob(self,energyspectrum,p0):
         """
         piprob returns the skewed gaussian probability distribution for a given energy. 
@@ -167,21 +119,16 @@ class ACIS(object):
         The behavior was determined from extrapolation of the RMF behavior above 0.3 keV.
         The sigma and mu for the gaussian are linear extrapolations while the alpha or 
         skewness parameter is assumed to plateau at -1.9126. 
-
+        
         An alternative extrapolation would be for sigma to also plateau at a value of 3.6.
         
-        In the future, or in the MCMC, maybe we could vary the sigma...
+        In the future, or in the MCMC, maybe we could vary the sigma... probably not.
         """
-        
         mu_m,mu_b,sigma_m,sigma_b,alpha_pi = p0
-
         mu = mu_m*self.e+mu_b
         sigma = sigma_m*self.e+sigma_b
-
         cs = np.zeros(len(self.chan)).astype(np.float64)
-
         # each energy bin of photons arriving at the detector (ARF*S) are spread onto the channels:
-        
         # uncomment following when piprob has free parameters
         # for mu_i,sig_i,es_i in zip(mu,sigma,energyspectrum):
         #     cs += 2.0*self.NormPDF(self.chan,mu_i,sig_i)*self.NormCDF(self.chan,mu_i,sig_i,alpha_pi)*es_i
@@ -189,24 +136,26 @@ class ACIS(object):
         # uncomment following when piprob is fixed
         for ii,es_i in enumerate(energyspectrum):
             cs += self.fixpiprob[ii]*es_i
-
+        
         return cs
 
     def logprior(self,t):
-
+        ''' 
+        In CASE I, there are only priors on the stellar parameters: 
+        '''
         # free parameters
         Teff,Dist,Rad,NH = t
 
-        if not ((NH >= 0.0) & (NH < 0.1)):
+        if not ((NH >= 0.0) & (NH < 0.1)): # priors are absorption (cm^-3)
             return -np.inf
 
-        if not ((Teff > 60000.0) & (Teff < 200000.0)):
+        if not ((Teff > 60000.0) & (Teff < 200000.0)):  # priors on Teff (K)
             return -np.inf
 
-        if not ((Rad > 0.0) & (Rad < 0.5)):
+        if not ((Rad > 0.0) & (Rad < 0.5)): # priors are stellar radius (R_sun)
             return -np.inf
 
-        if not ((Dist > 0.0) & (Dist < 1.0)):
+        if not ((Dist > 0.0) & (Dist < 1.0)): # priors are distance (kpc)
             return -np.inf
 
         return 0.0
@@ -219,20 +168,17 @@ class ACIS(object):
         # calculate blackbody
         bbody_i = self.bb_free(Teff,Dist,Rad)
 
-        # generate N_H function from interpolators
+        # generate N_H function
         # extarr = np.ones_like(bbody_i)
         extarr = self.wabs(NH)
 
-        # for ii,cID in enumerate(self.channelID):
-        #     extarr[ii] = self.interpobj[cID](NH)
-
-        # create ext. blackbody
+        # create extincted blackbody
         bbody = np.multiply(bbody_i,np.array(extarr))
 
         # produce a dummy array for arf
         arf = np.ones_like(bbody)
 
-        # # for 4-bins
+        # populate the arf array from best-guest (CASE I) for the 4 energy bins
         for ii,ee_i in enumerate(self.e):
             if (ee_i >= 0.175) and (ee_i < 0.23):
                 arf[ii] = self.arf1
