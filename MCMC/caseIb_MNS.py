@@ -2,16 +2,18 @@
 
 from __future__ import print_function
 import numpy as np
-import emcee
 from scipy import pi,sqrt,exp,interpolate
-from scipy.special import erf
+from scipy.special import erf,ndtri
 from astropy.table import Table
 import itertools
 import sys,time,datetime, math,re,operator
 from datetime import datetime
+import nestle
+import h5py
 
 '''
-CASE I: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
+CASE Ib: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
+ -> Ib : Using gaussian prior on distance based on the measured parallax of the star
 
 Generally, we use specific energy bins to generate the effective area curve, the bins are: 
 e1 = 0.175 - 0.231 keV,  e2 = 0.231 - 0.258 keV,  e3 = 0.258 - 0.277 keV,  e4 = 0.277 - 0.3 keV
@@ -47,13 +49,17 @@ class ACIS(object):
         self.Teff = 108600.0
         self.Rad  = 0.045
         self.Dist = 405.0/1000.0
-        self.NH = 0.05
+        Av = 0.30
+        self.NH = Av*(1.79E+21)/(1E+22)
         
         self.eTeff = 6800.0
         self.eRad  = 0.004
         self.eDist = 28.0/1000.0
         self.eNH = 0.01
         
+        # CASE I number of dimensions
+        self.ndim = 4
+
         # functional form of exinction curve, W(N_H), from source unknown
         c0 = [34.6,267.9,-476.1]
         c1 = [78.1, 18.8, 4.3]
@@ -93,14 +99,12 @@ class ACIS(object):
     def wabs(self,nh): # c=[34.6,267.9,-476.1]):
         ''' wabs function used to calculate extinction for a given nh and using the functional form stored in self.w '''
         return np.exp(-nh*self.w)
-
     def NormPDF(self,x,mu,sigma):
         ''' NormPDF used in piprob function '''
         return (1/(sigma*np.sqrt(2.0*np.pi)))*np.exp(-((x-mu)/(np.sqrt(2.0)*sigma))**2.0)
     def NormCDF(self,x,mu,sigma,alpha):
         ''' NormCDF used in piprob function '''
         return (0.5*(1.0+erf((alpha*((x-mu)/sigma))/np.sqrt(2.0))))
-
     def bb_free(self,Teff,Dist,Rad):
         """ 
         bb function is the blackbody source function, for M27, with the values given below.
@@ -110,7 +114,6 @@ class ACIS(object):
         BBnorm = (Lstar/1.0e+39)*np.power(Dist/10.0,-2.0)
         kT = Teff/11604.5e+3 
         return BBnorm*8.0525*np.power(self.e,2.0)*np.power(kT,-4.0)/(np.exp(self.e/kT)-1.0)
-        
     def piprob(self,energyspectrum,p0):
         """
         piprob returns the skewed gaussian probability distribution for a given energy. 
@@ -138,27 +141,35 @@ class ACIS(object):
             cs += self.fixpiprob[ii]*es_i
         
         return cs
-
-    def logprior(self,t):
-        ''' 
-        In CASE I, there are only priors on the stellar parameters: 
-        '''
-        # free parameters
+    
+    def prior_trans(self,t):
         Teff,Dist,Rad,NH = t
+        # define range and min values
+        Teffrange = 200000.0-60000.0
+        Teffmin   = 60000.0
 
-        if not ((NH >= 0.0) & (NH < 0.1)): # priors are absorption (cm^-3)
-            return -np.inf
+        # Distrange = 1.0-0.0
+        # Distmin   = 0.0
 
-        if not ((Teff > 60000.0) & (Teff < 200000.0)):  # priors on Teff (K)
-            return -np.inf
+        Distmu = 405.0/1000.0
+        Distsig = 28.0/1000.0
 
-        if not ((Rad > 0.0) & (Rad < 0.5)): # priors are stellar radius (R_sun)
-            return -np.inf
+        Radrange = 0.5-0.0
+        Radmin   = 0.0
 
-        if not ((Dist > 0.0) & (Dist < 1.0)): # priors are distance (kpc)
-            return -np.inf
+        NHrange = 0.1-0.0
+        NHmin   = 0.0
 
-        return 0.0
+        # build normalized prior array
+        outarr = np.array([
+            Teffrange*Teff+Teffmin,
+            # Distrange*Dist+Distmin,
+            Distmu + Distsig*ndtri(Dist),
+            Radrange*Rad+Radmin,
+            NHrange*NH+NHmin])
+        return outarr
+
+
 
     def loglhood(self,t):
 
@@ -209,79 +220,62 @@ class ACIS(object):
         return lnprob_out
 
     def calllike(self, par):
-        lp = self.logprior(par)
-        if (lp == -np.inf):
-            return lp
-        return lp + self.loglhood(par)
+        # store par into self so that we can write it during callback function
+        self.par = par
+        # return log(likelihood prob)
+        return self.loglhood(par)
 
-    def run_MCMC(self):
-        # Now, set up and run the sampler:
+    def nestle_callback(self,iterinfo):
+        # write iteration number
+        self.outfile.write('{0} '.format(iterinfo['it']))
+        # write parameters at iteration
+        for pp in self.par:
+            self.outfile.write('{0} '.format(pp))
+        # write the evidence
+        self.outfile.write('{0}'.format(iterinfo['logz']))
+        # write new line
+        self.outfile.write('\n')
 
-        # number of walkers
-        nwalkers = 250
+        # print iteration number and evidence at specific iterations
+        if iterinfo['it'] % 100 == 0:
+            if iterinfo['logz'] < -10E+6:
+                print('Iter: {0} < -10M'.format(iterinfo['it']))
+            else:
+                print('Iter: {0} = {1}'.format(iterinfo['it'],iterinfo['logz']))
 
-        # initial ball values for free parameters
-        # Tefff, Dist, Rad, N_H
-        p0mean = [143431.928537, 0.410281810919, 0.0333451376657, 0.05]
-        p0std  = [2000.0,        0.01,           0.01,            0.001]
-
-        # set up initial sampler's ball positions
-        p0 = [[y*np.random.triangular(-1,0,1)+x for x,y in zip(p0mean,p0std)] for _ in range(nwalkers)]
-
-        # number of dim
-        ndim = len(p0mean)
-
-        # Instantiate the class
-        likefunc = self.calllike
-
-        # The sampler object:
-        # sampler = emcee.EnsembleSampler(nwalkers, ndim, logposterior, threads=10)
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, likefunc, threads=0)
-
-        # Burn in.
-        startbin = datetime.now()
-        bintime = startbin
-        iternum = 1
-        for pos0, prob0, state0 in sampler.sample(p0,iterations=500,storechain=False):
-            if iternum % 100 == 0.0:
-                print('BURN IN: Finished iteration: {0} -- Time: {1} -- mean(AF): {2}'.format(
-                    iternum,datetime.now()-bintime,np.mean(sampler.acceptance_fraction)))
-                bintime = datetime.now()
-            iternum = iternum + 1
-
-        # Clear the burn in.
-        sampler.reset()
-
-        # Sample, outputting to a file
-        fn = "ACIScal_I.out"
-
-        with open(fn, "w") as f:
-            f.write('WN Teff Dist Rad NH lnprob\n')
-
-        walkernum = np.arange(1,nwalkers+1,1).reshape(nwalkers,1)
-        startmct = datetime.now()
-        ii = 1
-        for pos, prob, rstate in sampler.sample(pos0, prob0, state0, iterations=1000,storechain=False):
-            pos_matrix=pos.reshape(nwalkers,ndim)
-            pos_matrix=np.append(walkernum,pos_matrix,axis=1)
-            prob_array=prob.reshape(nwalkers,1)
-            steparray =np.append(pos_matrix,prob_array,axis=1)
-            if ii % 100 == 0.0:
-                print('Finished iteration: {0} -- Time: {1} -- mean(AF): {2}'.format(
-                                    ii,datetime.now()-startmct,np.mean(sampler.acceptance_fraction)))
-                startmct = datetime.now()
-            # Write the current position to a file, one line per walker
-            f = open(fn, "a")
-            f.write("\n".join(["\t".join([str(q) for q in p]) for p in steparray]))
-            f.write("\n")
-            f.close()
-            ii = ii + 1
-        t = Table.read(fn,format='ascii')
-        t.write(fn+'.fits',format='fits')
-        print('Total Time -> {0}'.format(datetime.now()-startbin))        
+    def run_nestle(self,outfile='TEST.dat'):
+        # initalize outfile 
+        self.outfile = open(outfile,'w')
+        self.outfile.write('ITER Teff Rad Dist NH log(z) \n')
+        # Start sampler
+        print('Start Nestle')
+        result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=1000,callback=self.nestle_callback)
+        # generate posterior means and covariances
+        p,cov = nestle.mean_and_cov(result.samples,result.weights)
+        # close output file
+        self.outfile.close()
+        return result,p,cov
 
 if __name__ == '__main__':
     # initialize the class
     c = ACIS()
+    # outfile names
+    outfile = 'ACIScal_I_MNS_CASEIb.out'
+    outh5file = 'ACIScal_I_MNS_CASEIb.h5'
     # run the MCMC
-    c.run_MCMC()
+    starttime = datetime.now()
+    results,p,cov = c.run_nestle(outfile)
+    print('FINISHED MNS: {0}s'.format(datetime.now()-starttime))
+    print('Summary of MNS... ')
+    print(results.summary())
+
+    # write results into HDF5 file
+    outh5 = h5py.File(outh5file,'w')
+    for kk in results.keys():
+        outh5.create_dataset(kk,data=np.array(results[kk]))
+    outh5.create_dataset('P',data=np.array(p))
+    outh5.create_dataset('COV',data=np.array(cov))
+
+    # flush and close hdf5 file
+    outh5.flush()
+    outh5.close()
