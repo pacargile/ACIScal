@@ -3,7 +3,7 @@
 from __future__ import print_function
 import numpy as np
 from scipy import pi,sqrt,exp,interpolate
-from scipy.special import erf
+from scipy.special import erf,ndtri
 from astropy.table import Table
 import itertools
 import sys,time,datetime, math,re,operator
@@ -12,7 +12,8 @@ import nestle
 import h5py
 
 '''
-CASE I: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
+CASE Ib: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
+ -> Ib : Using gaussian prior on distance based on the measured parallax of the star
 
 Generally, we use specific energy bins to generate the effective area curve, the bins are: 
 e1 = 0.175 - 0.231 keV,  e2 = 0.231 - 0.258 keV,  e3 = 0.258 - 0.277 keV,  e4 = 0.277 - 0.3 keV
@@ -57,7 +58,7 @@ class ACIS(object):
         self.eNH = 0.01
         
         # CASE I number of dimensions
-        self.ndim = 4
+        self.ndim = 6
 
         # functional form of exinction curve, W(N_H), from source unknown
         c0 = [34.6,267.9,-476.1]
@@ -140,15 +141,19 @@ class ACIS(object):
             cs += self.fixpiprob[ii]*es_i
         
         return cs
-    
+   
     def prior_trans(self,t):
-        Teff,Dist,Rad,NH = t
+        Teff,Dist,Rad,NH,arfsc1,arfsc2 = t
+
         # define range and min values
         Teffrange = 200000.0-60000.0
         Teffmin   = 60000.0
 
-        Distrange = 1.0-0.0
-        Distmin   = 0.0
+        # Distrange = 1.0-0.0
+        # Distmin   = 0.0
+
+        Distmu = 405.0/1000.0
+        Distsig = 28.0/1000.0
 
         Radrange = 0.08-0.0
         Radmin   = 0.0
@@ -156,20 +161,25 @@ class ACIS(object):
         NHrange = 0.1-0.0
         NHmin   = 0.0
 
+        arfscran = 1.0 - 0.0
+        arfscmin = 0.0
+
         # build normalized prior array
         outarr = np.array([
             Teffrange*Teff+Teffmin,
-            Distrange*Dist+Distmin,
+            # Distrange*Dist+Distmin,
+            Distmu + Distsig*ndtri(Dist),
             Radrange*Rad+Radmin,
-            NHrange*NH+NHmin])
+            NHrange*NH+NHmin,
+            arfscran * arfsc1 + arfscmin,
+            arfscran * arfsc2 + arfscmin,
+            ])
         return outarr
-
-
 
     def loglhood(self,t):
 
         # Free parameters, for case 1: Teff, distance, radius
-        Teff,Dist,Rad,NH = t
+        Teff,Dist,Rad,NH,arfsc1,arfsc2 = t
 
         # calculate blackbody
         bbody_i = self.bb_free(Teff,Dist,Rad)
@@ -187,13 +197,13 @@ class ACIS(object):
         # populate the arf array from best-guest (CASE I) for the 4 energy bins
         for ii,ee_i in enumerate(self.e):
             if (ee_i >= 0.175) and (ee_i < 0.23):
-                arf[ii] = self.arf1
+                arf[ii] = self.arf1*arfsc1
             elif (ee_i >= 0.23) and (ee_i < 0.26):
-                arf[ii] = self.arf2
+                arf[ii] = self.arf2*arfsc1
             elif (ee_i >= 0.26) and (ee_i < 0.287):
-                arf[ii] = self.arf3
+                arf[ii] = self.arf3*arfsc1
             elif (ee_i >= 0.287):
-                arf[ii] = self.arf4
+                arf[ii] = self.arf4*arfsc2
 
 
         par_pi = ([self.initarr['mu_m'],self.initarr['mu_b'],self.initarr['sigma_m'],
@@ -241,7 +251,7 @@ class ACIS(object):
     def run_nestle(self,outfile='TEST.dat'):
         # initalize outfile 
         self.outfile = open(outfile,'w')
-        self.outfile.write('ITER Teff Dist Rad NH log(z) \n')
+        self.outfile.write('ITER Teff Dist Rad NH arfsc1 arfsc2 log(z) \n')
         # Start sampler
         print('Start Nestle')
         result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=1000,callback=self.nestle_callback)
@@ -255,8 +265,8 @@ if __name__ == '__main__':
     # initialize the class
     c = ACIS()
     # outfile names
-    outfile = 'ACIScal_I_MNS_CASEI.out'
-    outh5file = 'ACIScal_I_MNS_CASEI.h5'
+    outfile = 'ACIScal_I_MNS_CASEVb.out'
+    outh5file = 'ACIScal_I_MNS_CASEVb.h5'
     # run the MCMC
     starttime = datetime.now()
     results,p,cov = c.run_nestle(outfile)

@@ -154,7 +154,7 @@ class ACIS(object):
         Distmu = 405.0/1000.0
         Distsig = 28.0/1000.0
 
-        Radrange = 0.5-0.0
+        Radrange = 0.08-0.0
         Radmin   = 0.0
 
         NHrange = 0.1-0.0
@@ -246,7 +246,7 @@ class ACIS(object):
     def run_nestle(self,outfile='TEST.dat'):
         # initalize outfile 
         self.outfile = open(outfile,'w')
-        self.outfile.write('ITER Teff Rad Dist NH log(z) \n')
+        self.outfile.write('ITER Teff Dist Rad NH log(z) \n')
         # Start sampler
         print('Start Nestle')
         result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=1000,callback=self.nestle_callback)

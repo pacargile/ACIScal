@@ -235,10 +235,10 @@ class ACIS(object):
     def run_nestle(self,outfile='TEST.dat'):
         # initalize outfile 
         self.outfile = open(outfile,'w')
-        self.outfile.write('ITER Teff Rad Dist NH arfsc log(z) \n')
+        self.outfile.write('ITER Teff Dist Rad NH arfsc log(z) \n')
         # Start sampler
         print('Start Nestle')
-        result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='single',npoints=1000,callback=self.nestle_callback)
+        result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=1000,callback=self.nestle_callback)
         # generate posterior means and covariances
         p,cov = nestle.mean_and_cov(result.samples,result.weights)
         # close output file
