@@ -12,7 +12,9 @@ import nestle
 import h5py
 
 '''
-CASE Ib: calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
+CASE IIb: NEEDS UPDATE
+
+calculating the stellar parameters based on suspected Cycle 12 ACIS calibration
  -> Ib : Using gaussian prior on distance based on the measured parallax of the star
 
 Generally, we use specific energy bins to generate the effective area curve, the bins are: 
@@ -44,7 +46,7 @@ class ACIS(object):
         # parameters for Black Body
         # make a dummy energy array from 0.175 to 0.31 
         self.e = np.arange(0.175,0.31,0.01)
-        self.Lstar = np.power(10,2.49)*3.8e+33
+        self.Lstar = np.power(10,2.49)*3.828e+33
         
         self.Teff = 108600.0
         self.Rad  = 0.045
@@ -109,7 +111,7 @@ class ACIS(object):
         """ 
         bb function is the blackbody source function, for M27, with the values given below.
         """
-        Lstar = (Rad**2.0)*((Teff/5770.0)**4.0)*3.8e+33
+        Lstar = (Rad**2.0)*((Teff/5777.0)**4.0)*3.828e+33
 
         BBnorm = (Lstar/1.0e+39)*np.power(Dist/10.0,-2.0)
         kT = Teff/11604.5e+3 
