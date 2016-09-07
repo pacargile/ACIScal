@@ -237,24 +237,28 @@ class ACIS(object):
         for pp in self.par:
             self.outfile.write('{0} '.format(pp))
         # write the evidence
-        self.outfile.write('{0}'.format(iterinfo['logz']))
+        self.outfile.write('{0} '.format(iterinfo['logz']))
+        # write out the weights
+        self.outfile.write('{0} '.format(iterinfo['logwt']))
         # write new line
         self.outfile.write('\n')
 
         # print iteration number and evidence at specific iterations
-        if iterinfo['it'] % 100 == 0:
+        if iterinfo['it'] % 250 == 0:
             if iterinfo['logz'] < -10E+6:
-                print('Iter: {0} < -10M'.format(iterinfo['it']))
+                print('Iter: {0} log(z) < -10M log(vol) = {1} Time: {2}'.format(iterinfo['it'],iterinfo['logvol'],datetime.now()-self.startmct))
             else:
-                print('Iter: {0} = {1}'.format(iterinfo['it'],iterinfo['logz']))
+                print('Iter: {0} log(z) = {1} log(vol) = {2} Time: {3}'.format(iterinfo['it'],iterinfo['logz'],iterinfo['logvol'],datetime.now()-self.startmct))
+            self.startmct = datetime.now()
 
     def run_nestle(self,outfile='TEST.dat'):
         # initalize outfile 
         self.outfile = open(outfile,'w')
-        self.outfile.write('ITER Teff Dist Rad NH arfsc log(z) \n')
+        self.outfile.write('ITER Teff Dist Rad NH arfsc log(z) log(wt) \n')
         # Start sampler
         print('Start Nestle')
-        result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=1000,callback=self.nestle_callback)
+        self.startmct = datetime.now()
+        result = nestle.sample(self.calllike,self.prior_trans,self.ndim,method='multi',npoints=5000,callback=self.nestle_callback)
         # generate posterior means and covariances
         p,cov = nestle.mean_and_cov(result.samples,result.weights)
         # close output file
